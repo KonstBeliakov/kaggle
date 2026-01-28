@@ -12,9 +12,11 @@ from sklearn.model_selection import train_test_split
 class MLP(nn.Module):
     def __init__(self, input_size):
         super(MLP, self).__init__()
-        self.hidden_size = 64
+        self.hidden_size = 256
         self.network = nn.Sequential(
             nn.Linear(input_size, self.hidden_size),
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
@@ -33,12 +35,10 @@ class MLP(nn.Module):
         y_val_tensor = torch.tensor(y_val.values, dtype=torch.float32).view(-1, 1)
 
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(self.parameters(), lr=0.001)
+        optimizer = optim.Adam(self.parameters(), lr=0.0003)
 
-        epochs = 100
+        epochs = 1000
         for epoch in range(epochs):
-            print(f'Epoch [{epoch + 1}/{epochs}]')
-
             self.train()
             optimizer.zero_grad()
             outputs = self.forward(X_train_tensor)
@@ -107,42 +107,31 @@ def preprocess(df):
 if __name__ == '__main__':
     train_df = pd.read_csv('train.csv')
 
-    print(train_df.head())
-
     train_df = preprocess(train_df)
 
-    train_df.to_csv('train_processed.csv', index=False)
-
-    X = train_df.drop('SalePrice', axis=1)
+    X = train_df.drop(['SalePrice', 'Id'], axis=1)
     Y = train_df['SalePrice']
-
-    print(f'Input parameters: {X.shape[1]}')
 
     mlp = MLP(input_size=X.shape[1])
     mlp.fit(X, Y)
 
     test_df = pd.read_csv('test.csv')
+    test_df_ids = test_df['Id']
+    test_df = test_df.drop('Id', axis=1)
     test_df = preprocess(test_df)
     test_df = test_df.reindex(columns=X.columns, fill_value=0)
 
     mlp.eval()
-    #with torch.no_grad():
-    #    X_test_tensor = torch.tensor(test_df.values, dtype=torch.float32)
-    #    predictions = mlp.forward(X_test_tensor)
-    #    print(predictions.shape, '\n', predictions)
 
     X_test_tensor = torch.tensor(test_df.values, dtype=torch.float32)
 
     with torch.no_grad():
-        result = mlp.forward(X_test_tensor).squeeze()
-
-    print(type(result))
-    print(result)
+        predictions = mlp.forward(X_test_tensor).squeeze()
 
     submission = pd.DataFrame(
         {
-            'Id': test_df['Id'].astype('int'),
-            'SalePrice': result
+            'Id': test_df_ids.astype('int'),
+            'SalePrice': predictions
         }
     )
     submission.to_csv('submission.csv', index=False)
