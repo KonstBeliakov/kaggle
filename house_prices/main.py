@@ -12,15 +12,16 @@ from sklearn.model_selection import train_test_split
 class MLP(nn.Module):
     def __init__(self, input_size):
         super(MLP, self).__init__()
-        self.hidden_size = 256
         self.network = nn.Sequential(
-            nn.Linear(input_size, self.hidden_size),
+            nn.Linear(input_size, 512),
             nn.ReLU(),
-            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.Dropout(0.2),
+            nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Linear(self.hidden_size, self.hidden_size),
+            nn.Dropout(0.2),
+            nn.Linear(256, 256),
             nn.ReLU(),
-            nn.Linear(self.hidden_size, 1)
+            nn.Linear(256, 1)
         )
 
     def forward(self, x):
@@ -72,18 +73,18 @@ def preprocess(df):
                             "FireplaceQu", "GarageType", "GarageFinish", "PoolQC", "Fence", "SaleType", "SaleCondition"]
     drop_columns = [
         'Street',  # in the training data all values are the same
-        'Alley',  # low diversity of values
+        #'Alley',  # low diversity of values
         'Utilities',  # in training data all values are the same
-        'LandContour',  # low diversity of values
-        'LandSlope',  # low diversity of values
-        "RoofMatl",  # low diversity of values
-        "ExterCond",  # low diversity of values
-        "BsmtCond",
-        "BsmtExposure",
+        #'LandContour',  # low diversity of values
+        #'LandSlope',  # low diversity of values
+        #"RoofMatl",  # low diversity of values
+        #"ExterCond",  # low diversity of values
+        #"BsmtCond",
+        #"BsmtExposure",
         "Heating",  # all values are the same
-        "GarageQual",
-        "GarageCond",
-        "PavedDrive",
+        #"GarageQual",
+        #"GarageCond",
+        #"PavedDrive",
         "MiscFeature",  # hard to interpret
         "MiscVal",
     ]
