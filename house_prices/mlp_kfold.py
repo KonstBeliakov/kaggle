@@ -1,5 +1,5 @@
 # https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques/
-
+import numpy as np
 import pandas as pd
 
 import torch
@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold
 
 
 class MLP(nn.Module):
@@ -15,10 +16,10 @@ class MLP(nn.Module):
         self.network = nn.Sequential(
             nn.Linear(input_size, 512),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(DROPOUT_FRACTION),
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(DROPOUT_FRACTION),
             nn.Linear(256, 256),
             nn.ReLU(),
             nn.Linear(256, 1)
@@ -27,33 +28,20 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-    def fit(self, X: pd.DataFrame, y: pd.DataFrame):
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, random_state=42)
-
-        X_train_tensor = torch.tensor(X_train.values, dtype=torch.float32)
-        y_train_tensor = torch.tensor(y_train.values, dtype=torch.float32).view(-1, 1)
-        X_val_tensor = torch.tensor(X_val.values, dtype=torch.float32)
-        y_val_tensor = torch.tensor(y_val.values, dtype=torch.float32).view(-1, 1)
-
+    def fit(self, X: torch.Tensor, Y: torch.Tensor):
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(self.parameters(), lr=0.0003)
+        optimizer = optim.Adam(self.parameters(), lr=LEARNING_RATE)
 
-        epochs = 1000
-        for epoch in range(epochs):
+        for epoch in range(EPOCHS):
             self.train()
             optimizer.zero_grad()
-            outputs = self.forward(X_train_tensor)
-            loss = criterion(outputs, y_train_tensor)
+            outputs = self.forward(X)
+            loss = criterion(outputs, Y)
             loss.backward()
             optimizer.step()
 
-            if (epoch + 1) % 20 == 0:
-                self.eval()
-                with torch.no_grad():
-                    val_outputs = self.forward(X_val_tensor)
-                    val_loss = criterion(val_outputs, y_val_tensor)
-                    print(f'Epoch [{epoch + 1}/{epochs}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
-
+            if (epoch + 1) % 50 == 0:
+                print(f'\t{epoch + 1} epoch completed. Loss: {loss.item():.4f}')
 
 
 def preprocess(df):
@@ -104,6 +92,10 @@ def preprocess(df):
 
     return df
 
+DROPOUT_FRACTION = 0.05
+EPOCHS = 500
+LEARNING_RATE = 0.0002
+K = 5
 
 if __name__ == '__main__':
     train_df = pd.read_csv('train.csv')
@@ -111,28 +103,62 @@ if __name__ == '__main__':
     train_df = preprocess(train_df)
 
     X = train_df.drop(['SalePrice', 'Id'], axis=1)
+    X_columns = X.columns
+    X = torch.tensor(X.values, dtype=torch.float32)
     Y = train_df['SalePrice']
+    Y = torch.tensor(Y.values, dtype=torch.float32)
 
-    mlp = MLP(input_size=X.shape[1])
-    mlp.fit(X, Y)
+    kf = KFold(n_splits=K, shuffle=True, random_state=39)
+    fold_scores = []
+
+    models = []
+    for fold, (train_idx, val_idx) in enumerate(kf.split(X)):
+        X_train, X_val = X[train_idx], X[val_idx]
+        Y_train, Y_val = Y[train_idx], Y[val_idx]
+
+        model = MLP(input_size=X.shape[1])
+        models.append(model)
+
+        print(f'Training {fold + 1} model...')
+        model.fit(X_train, Y_train)
+        print('done')
+
+        model.eval()
+        with torch.no_grad():
+            val_tensor = torch.tensor(X_val, dtype=torch.float32)
+            predictions = model(val_tensor).squeeze()
+            mse = torch.nn.functional.mse_loss(predictions, torch.tensor(Y_val, dtype=torch.float32))
+            rmse = torch.sqrt(mse).item()
+            fold_scores.append(rmse)
+
+    print(f'Average RMSLE: {np.mean(fold_scores):.4f} (+/- {np.std(fold_scores):.4f})')
 
     test_df = pd.read_csv('test.csv')
     test_df_ids = test_df['Id']
     test_df = test_df.drop('Id', axis=1)
     test_df = preprocess(test_df)
-    test_df = test_df.reindex(columns=X.columns, fill_value=0)
+    test_df = test_df.reindex(columns=X_columns, fill_value=0)
 
-    mlp.eval()
+    predictions = []
+    for model in models:
+        model.eval()
 
-    X_test_tensor = torch.tensor(test_df.values, dtype=torch.float32)
+        X_test_tensor = torch.tensor(test_df.values, dtype=torch.float32)
 
-    with torch.no_grad():
-        predictions = mlp.forward(X_test_tensor).squeeze()
+        with torch.no_grad():
+            predictions.append(model.forward(X_test_tensor).squeeze())
+
+    avg = []
+    for id in range(X_test_tensor.shape[0]):
+        s = 0
+        for model_idx in range(K):
+            s += predictions[model_idx][id]
+        avg.append(float((s / K).item()))
 
     submission = pd.DataFrame(
         {
             'Id': test_df_ids.astype('int'),
-            'SalePrice': predictions
+            'SalePrice': pd.DataFrame(avg).squeeze()
         }
     )
     submission.to_csv('submission.csv', index=False)
