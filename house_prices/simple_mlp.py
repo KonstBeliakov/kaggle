@@ -1,5 +1,5 @@
 # https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques/
-
+import numpy as np
 import pandas as pd
 
 import torch
@@ -27,19 +27,23 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.network(x)
 
-    def fit(self, X: pd.DataFrame, y: pd.DataFrame):
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, random_state=42)
+    def fit(self, X: pd.DataFrame, y: pd.DataFrame, eval=True):
+        if eval:
+            X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.1, random_state=42)
+        else:
+            X_train = X
+            y_train = Y
 
         X_train_tensor = torch.tensor(X_train.values, dtype=torch.float32)
         y_train_tensor = torch.tensor(y_train.values, dtype=torch.float32).view(-1, 1)
-        X_val_tensor = torch.tensor(X_val.values, dtype=torch.float32)
-        y_val_tensor = torch.tensor(y_val.values, dtype=torch.float32).view(-1, 1)
+        if eval:
+            X_val_tensor = torch.tensor(X_val.values, dtype=torch.float32)
+            y_val_tensor = torch.tensor(y_val.values, dtype=torch.float32).view(-1, 1)
 
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(self.parameters(), lr=0.0003)
+        optimizer = optim.Adam(self.parameters(), lr=LEARNING_RATE)
 
-        epochs = 1000
-        for epoch in range(epochs):
+        for epoch in range(EPOCHS):
             self.train()
             optimizer.zero_grad()
             outputs = self.forward(X_train_tensor)
@@ -47,13 +51,15 @@ class MLP(nn.Module):
             loss.backward()
             optimizer.step()
 
-            if (epoch + 1) % 20 == 0:
+            if (epoch + 1) % 100 == 0:
                 self.eval()
-                with torch.no_grad():
-                    val_outputs = self.forward(X_val_tensor)
-                    val_loss = criterion(val_outputs, y_val_tensor)
-                    print(f'Epoch [{epoch + 1}/{epochs}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
-
+                if eval:
+                    with torch.no_grad():
+                        val_outputs = self.forward(X_val_tensor)
+                        val_loss = criterion(val_outputs, y_val_tensor)
+                    print(f'Epoch [{epoch + 1}/{EPOCHS}], Loss: {loss.item():.4f}, Val Loss: {val_loss.item():.4f}')
+                else:
+                    print(f'Epoch [{epoch + 1}/{EPOCHS}]')
 
 
 def preprocess(df):
@@ -92,18 +98,24 @@ def preprocess(df):
     df = df.replace("NA", pd.NA)
 
     df = df.drop(columns=drop_columns)
-    #df = pd.get_dummies(df, columns=list(set(categorical_features) - set(drop_columns)), drop_first=True)
 
-    cat_cols = df.select_dtypes(include=["object"]).columns
+    # replacing missing numerical values with median
+    num_cols = df.select_dtypes(include=np.number).columns
+    df[num_cols] = df[num_cols].fillna(df[num_cols].median())
+
+    # replacing missing categorical values with None
+    cat_cols = df.select_dtypes(include='object').columns
+    df[cat_cols] = df[cat_cols].fillna("None")
+
+    # One-Hot Encoding
     df = pd.get_dummies(df, columns=cat_cols, drop_first=True)
 
-    df = df.fillna(0.0)  # change that later
-
-    df = df.apply(pd.to_numeric, errors="coerce")
     df = df.astype("float32")
 
     return df
 
+EPOCHS = 1500
+LEARNING_RATE = 0.0002
 
 if __name__ == '__main__':
     train_df = pd.read_csv('train.csv')
@@ -113,14 +125,23 @@ if __name__ == '__main__':
     X = train_df.drop(['SalePrice', 'Id'], axis=1)
     Y = train_df['SalePrice']
 
+    # Scaling (for some reason it makes everything worse)
+    #scaler = StandardScaler()
+    #X_columns = X.columns
+    #X = scaler.fit_transform(X)
+    #X = pd.DataFrame(X, columns=X_columns)
+
     mlp = MLP(input_size=X.shape[1])
-    mlp.fit(X, Y)
+    mlp.fit(X, Y, eval=False)
 
     test_df = pd.read_csv('test.csv')
     test_df_ids = test_df['Id']
     test_df = test_df.drop('Id', axis=1)
     test_df = preprocess(test_df)
     test_df = test_df.reindex(columns=X.columns, fill_value=0)
+    #test_df_columns = test_df.columns
+    #test_df = scaler.transform(test_df)
+    #test_df = pd.DataFrame(test_df, columns=test_df_columns)
 
     mlp.eval()
 

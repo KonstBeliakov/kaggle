@@ -9,43 +9,75 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import KFold
 
-
 HIDDEN_LAYER_SIZE = 256
-EPOCHS = 30
+EPOCHS = 100
+DROPOUT_FRACTION = 0.2
+LEARNING_RATE = 0.001
 K = 5 # number of models in KFold
 
 
 # later I need to change that to CNN
-class MLP(nn.Module):
-    def __init__(self, input_size):
-        super(MLP, self).__init__()
-        self.network = nn.Sequential(
-            nn.Linear(input_size, HIDDEN_LAYER_SIZE),
+class CNN(nn.Module):
+    def __init__(self):
+        super(CNN, self).__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(HIDDEN_LAYER_SIZE, HIDDEN_LAYER_SIZE),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(HIDDEN_LAYER_SIZE, 10),
-            nn.Sigmoid()
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.25),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.25)
+        )
+
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.MaxPool2d(2, 2),
+            nn.Dropout(0.25)
+        )
+
+        self.fc = nn.Sequential(
+            nn.LazyLinear(512), #nn.Linear(128 * 3 * 3, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, 10)
         )
 
     def forward(self, x):
-        return self.network(x)
+        x = self.conv1(x.view(-1, 1, 28, 28))
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
 
     def fit(self, x: torch.Tensor, y: pd.DataFrame):
         # we dont need to split x and y into train and val, because we are using KFolding in main
 
-        print(f'{type(y)} {y=}')
         labels = y['label']
-        indices = y.drop('label', axis=1)
 
         # we need to transform y into list of 10 probabilities (1 equal to 1 and others equal to 0)
         # For each label we have tensor of size 10
         target_probabilities = torch.Tensor([[int(target==i) for i in range(10)] for target in labels])
 
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(self.parameters(), lr=0.001)
+        optimizer = optim.Adam(self.parameters(), lr=LEARNING_RATE)
 
         for epoch in range(EPOCHS):
             self.train()
@@ -55,7 +87,7 @@ class MLP(nn.Module):
             loss.backward()
             optimizer.step() # updating weights of out network
 
-            if (epoch + 1) % 20 == 0:
+            if (epoch + 1) % 10 == 0:
                 print(f'\tEpoch {epoch + 1} finished')
 
 
@@ -68,18 +100,16 @@ if __name__ == '__main__':
     X_tensor = torch.tensor(X.values, dtype=torch.float32)
     Y_tensor = torch.tensor(Y.values, dtype=torch.float32)
 
-    models: list[MLP] = []
+    models: list[CNN] = []
 
     kf = KFold(n_splits=K, shuffle=True, random_state=39)
     fold_scores = []
 
     for fold, (train_idx, val_idx) in enumerate(kf.split(X.columns)):
-        #print(f'{fold=} {train_idx=} {val_idx=}')
         X_train, X_val = X_tensor[train_idx], X_tensor[val_idx]
         y_train, y_val = Y[train_idx], Y[val_idx]
-        print(type(y_train), type(y_val), f'{y_train=}\n {y_val=}')
 
-        model = MLP(input_size=X.shape[1])
+        model = CNN()
         models.append(model)
 
         print(f'Training {fold + 1}...')
@@ -88,10 +118,10 @@ if __name__ == '__main__':
 
         model.eval()
         with torch.no_grad():
-            val_tensor = torch.tensor(X_val, dtype=torch.float32)
-            predictions = model.forward(val_tensor).squeeze()
+            X_val = X_val.clone().detach().to(torch.float32)
+            predictions = model.forward(X_val).squeeze()
             y_val_tensor = torch.Tensor([[int(i==target) for i in range(10)] for target in y_val])
-            mse = torch.nn.functional.mse_loss(predictions, y_val_tensor)
+            mse = torch.nn.functional.mse_loss(predictions.detach().clone(), y_val_tensor.detach().clone())
             rmse = torch.sqrt(mse).item()
             fold_scores.append(rmse)
             print(f"Fold {fold + 1} RMSLE: {rmse: 4f}")
@@ -101,32 +131,19 @@ if __name__ == '__main__':
     test_df = pd.read_csv('test.csv')
 
     X_test = torch.tensor(test_df.values, dtype=torch.float32)
+    test_items = X_test.shape[0]
 
-    predictions = []
     with torch.no_grad():
-        for model in models:
-            predictions.append(model.forward(X_test))
-            print(type(predictions), predictions)
-    print(type(predictions), predictions)
+        predictions = [model.forward(X_test) for model in models]
 
     # we need to calculate average predictions of test values by all models
-
-    #sum_prediction = [[0] * 10 for _ in range(X.shape[0])]
-
-    # for i in range(K):
-    #     for j in range(X.shape[0] - 1):
-    #         for k in range(10):
-    #             sum_prediction[j][k] += predictions[i][j][k].item()
-
     stacked_predictions = torch.stack(predictions) # creating a tensor from list of tensors
     avg_predictions = torch.mean(stacked_predictions, dim=0) # calculating average (redusing number of dimensions of tensor by 1)
-    labels = torch.argmax(avg_predictions, dim=1)  # finding maximal number in every row of size 10
-
-    # and find the most probable digit for each ImageId
+    labels = torch.argmax(avg_predictions, dim=1)  # finding maximal probability in every row of size 10
 
     submission = pd.DataFrame(
         {
-            'ImageId': 0,
+            'ImageId': list(range(1, test_items + 1)),
             'Label': labels
         }
     )

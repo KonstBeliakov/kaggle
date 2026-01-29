@@ -17,7 +17,7 @@ def preprocess_df(df: pd.DataFrame) -> pd.DataFrame:
     df["CabinMissing"] = df["Cabin"].isnull()
     df["Embarked"] = df["Embarked"].fillna("Unknown")
 
-    df = df.drop(columns=["Name", "Ticket", "Cabin"])
+    df = df.drop(columns=["Name", "Ticket", "Cabin", "PassengerId"])
 
     # one-hot encoding
     df = pd.get_dummies(
@@ -45,16 +45,15 @@ y = df_train['Survived']
 rf.fit(X, y)
 
 df_test = pd.read_csv('test.csv')
-
+df_test_ids = df_test["PassengerId"]
 df_test = preprocess_df(df_test)
 df_test = df_test.reindex(columns=train_columns, fill_value=0)
 
 predictions = rf.predict(df_test)
 
-test_passenger_ids = df_test["PassengerId"].copy()
 submission = pd.DataFrame(
     {
-        "PassengerId": test_passenger_ids,
+        "PassengerId": df_test_ids,
         "Survived": predictions
     }
 )
